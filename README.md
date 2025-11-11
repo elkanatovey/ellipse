@@ -58,7 +58,16 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
+5. **Optional** - Install Baby JubJub curve implementation:
+```bash
+pip install babyjubjub-py
+```
+
+**Note**: `babyjubjub-py` is a research prototype. See its [PyPI page](https://pypi.org/project/babyjubjub-py/) for security warnings before use.
+
 ### Basic Usage
+
+**Using secp256k1 (default):**
 
 ```python
 from ellipse import construct_ellipse_table_ec_parallel, retrieve_point_ec_khash
@@ -79,6 +88,25 @@ value = retrieve_point_ec_khash(items[0], table, meta["seed"], k=10)
 print(f"Retrieved: {value}")
 ```
 
+**Using Baby JubJub (alternative curve):**
+
+```python
+from ellipse_bjj import construct_ellipse_bjj_parallel, retrieve_point_bjj
+
+items = [b"item1", b"item2", b"item3"]
+
+# Same API, different curve
+table, meta = construct_ellipse_bjj_parallel(
+    items,
+    m=100,
+    k=10,
+    num_cores=8
+)
+
+value = retrieve_point_bjj(items[0], table, meta["seed"], k=10)
+print(f"Retrieved: {value}")
+```
+
 ### Run Tests
 
 ```bash
@@ -91,13 +119,21 @@ python test_parallel.py 900 1000 10 $(nproc)
 
 ## Performance
 
-For **900 items, 1000 slots, k=10**:
+**secp256k1 (fastecdsa) - Current implementation:**
 
-| Cores | Time       | Speedup |
-|-------|------------|---------|
-| 1     | 4.6 hours  | 1.0×    |
-| 8     | 40 minutes | 6.9×    |
-| 32    | 12 minutes | 23×     |
+For **n=90, m=100, k=10**:
+- **Serial**: ~40 seconds
+- **Parallel (2 cores)**: ~13.6 seconds (2.9× speedup)
+
+**Baby JubJub (optional - see `ellipse_bjj.py`):**
+
+For **n=90, m=100, k=10**:
+- **Parallel (2 cores)**: ~0.43 seconds
+
+For **n=900, m=1000, k=10**:
+- **Parallel (2 cores)**: ~70 seconds
+
+See `ellipse_bjj.py` for Baby JubJub implementation.
 
 See `PARALLEL_USAGE.md` for detailed performance analysis.
 

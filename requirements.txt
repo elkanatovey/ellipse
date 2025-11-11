@@ -1,3 +1,6 @@
 fastecdsa==3.0.1
 numpy==2.2.6
 scipy==1.15.3
+
+# Optional: Baby JubJub curve implementation (research prototype)
+# babyjubjub-py==0.1.1
