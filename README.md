@@ -121,5 +121,7 @@ pip freeze > requirements.txt
 
 ## License
 
-[Add your license here]
+MIT License - see [LICENSE](LICENSE) file for details.
+
+Copyright (c) 2025 Elkana Tovey
 
