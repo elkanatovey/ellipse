@@ -59,28 +59,6 @@ for item in items:
     print(f"Retrieved: {value}")
 ```
 
-## Performance Expectations
-
-For **900 items, 1000 slots, k=10**:
-
-| Cores | Estimated Time | Speedup | Efficiency |
-|-------|----------------|---------|------------|
-| 1     | 4.6 hours      | 1.0×    | 100%       |
-| 2     | 2.4 hours      | 1.9×    | 95%        |
-| 4     | 1.3 hours      | 3.5×    | 88%        |
-| 8     | 40 minutes     | 6.9×    | 86%        |
-| 16    | 22 minutes     | 12.5×   | 78%        |
-| 32    | 12 minutes     | 23×     | 72%        |
-| 64    | 7 minutes      | 39×     | 61%        |
-| 128   | 4 minutes      | 69×     | 54%        |
-
-**Note:** Efficiency drops at higher core counts because:
-1. The number of rows to eliminate decreases with each pivot (from 900 to 0)
-2. Multiprocessing overhead becomes more significant
-3. Memory bandwidth can become a bottleneck
-
-**Sweet spot:** 8-32 cores for best efficiency/cost ratio
-
 ## Why It's Fast
 
 ### What's Parallelized:
@@ -160,29 +138,6 @@ For `n=900`:
 - Max theoretical: 450 cores
 - Max practical: 90 cores
 - Sweet spot: 16-32 cores (best efficiency)
-
-## Comparison with Other Methods
-
-| Method | Time (900 items, k=10) | Pros | Cons |
-|--------|------------------------|------|------|
-| Dense Gaussian (1 core) | ~4.6 hours | Simple | Very slow |
-| Sparse Gaussian (1 core) | ~5.2 hours | Memory efficient | Slower than dense |
-| Peeling (1 core) | N/A | Very fast for low k | Doesn't work for k≥10 |
-| **Parallel (8 cores)** | **~40 min** | **Fast, scalable** | Needs multiple cores |
-| **Parallel (32 cores)** | **~12 min** | **Very fast** | Needs many cores |
-
-## Future Optimizations
-
-1. **Hybrid approach:** Use peeling to reduce n, then parallel Gaussian on core
-   - Expected speedup: 1.2-1.5× (marginal gain)
-
-2. **GPU acceleration:** Use CUDA/OpenCL for EC operations
-   - Expected speedup: 10-100× (significant, but complex)
-   - Requires GPU-optimized EC library (e.g., cuECC)
-
-3. **Distributed computation:** Spread work across multiple machines
-   - Expected speedup: near-linear with number of machines
-   - Communication overhead becomes bottleneck
 
 ## Troubleshooting
 
