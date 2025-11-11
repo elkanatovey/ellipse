@@ -15,6 +15,7 @@ Think of it as a minimal perfect hash function, but for cryptographic EC points 
 
 ## Features
 
+- **Fast EC operations** - Uses `fastecdsa` library for high-performance secp256k1
 - **Parallel construction** - Near-linear speedup with CPU cores (8 cores = 7× faster)
 - **Elliptic curve operations** - Works with secp256k1 EC points
 - **Scalable** - Handles hundreds to thousands of items efficiently
@@ -102,6 +103,7 @@ See `PARALLEL_USAGE.md` for detailed performance analysis.
 
 ## Documentation
 
+- **[FASTECDSA_IMPLEMENTATION.md](FASTECDSA_IMPLEMENTATION.md)** - Implementation details and API reference
 - **[PARALLEL_USAGE.md](PARALLEL_USAGE.md)** - Comprehensive guide to parallel construction
 - **[ellipse.py](ellipse.py)** - Main implementation with docstrings
 

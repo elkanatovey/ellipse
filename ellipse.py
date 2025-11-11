@@ -9,7 +9,7 @@ Construction methods:
 2. Gaussian elimination (handles cycles naturally, supports parallelization)
 3. Peeling-based (fastest for sparse systems)
 
-Uses the 'cryptography' library for optimized EC operations.
+Uses the 'fastecdsa' library for fast EC operations.
 """
 
 import hashlib
@@ -18,8 +18,8 @@ import random
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from multiprocessing import Pool, cpu_count
 
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import serialization
+from fastecdsa import curve
+from fastecdsa.point import Point as FastPoint
 
 try:
     import scipy.sparse as sp
@@ -30,16 +30,17 @@ except ImportError:
 
 
 # Use secp256k1 curve
-_CURVE = ec.SECP256K1()
+_CURVE = curve.secp256k1
 _EC_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 _EC_INV_TWO = pow(2, _EC_N - 2, _EC_N)
+_EC_P = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
 
 
 class ECPoint:
-	"""Wrapper for elliptic curve points using cryptography library."""
+	"""Wrapper for elliptic curve points using fastecdsa library."""
 	__slots__ = ("_point",)
 
-	def __init__(self, point: Optional[ec.EllipticCurvePublicKey] = None):
+	def __init__(self, point: Optional[FastPoint] = None):
 		"""
 		Create an ECPoint.
 		If point is None, this represents the point at infinity.
@@ -49,41 +50,33 @@ class ECPoint:
 	@classmethod
 	def from_affine(cls, x: int, y: int) -> 'ECPoint':
 		"""Create a point from affine coordinates."""
-		from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicNumbers
-		numbers = EllipticCurvePublicNumbers(x, y, _CURVE)
-		return cls(numbers.public_key())
+		point = FastPoint(x, y, curve=_CURVE)
+		return cls(point)
 
 	@classmethod
 	def generator(cls) -> 'ECPoint':
 		"""Return the generator point G."""
-		# Generate G by creating a private key with value 1 and getting its public key
-		from cryptography.hazmat.backends import default_backend
-		from cryptography.hazmat.primitives.asymmetric import ec
-		# Actually, easier way: multiply by 1
-		return cls.from_scalar(1)
+		return cls(_CURVE.G)
 
 	@classmethod
 	def from_scalar(cls, k: int) -> 'ECPoint':
 		"""Create a point by scalar multiplication: k * G."""
-		from cryptography.hazmat.backends import default_backend
 		k = k % _EC_N
 		if k == 0:
 			return cls(None)  # Point at infinity
-		# Create private key from scalar
-		private_key = ec.derive_private_key(k, _CURVE, default_backend())
-		return cls(private_key.public_key())
+		point = k * _CURVE.G
+		return cls(point)
 
 	@property
 	def is_infinity(self) -> bool:
 		"""Check if this is the point at infinity."""
-		return self._point is None
+		return self._point is None or (hasattr(self._point, '_is_identity') and self._point._is_identity())
 
 	def to_affine(self) -> Tuple[Optional[int], Optional[int]]:
 		"""Get affine coordinates (x, y). Returns (None, None) for infinity."""
 		if self.is_infinity:
 			return None, None
-		numbers = self._point.public_numbers()
-		return numbers.x, numbers.y
+		return self._point.x, self._point.y
 
 	def __repr__(self) -> str:
 		if self.is_infinity:
@@ -107,52 +100,15 @@ EC_G = ECPoint.generator()
 
 
 def _ec_point_add(p1: ECPoint, p2: ECPoint) -> ECPoint:
-	"""Add two elliptic curve points."""
+	"""Add two elliptic curve points using fastecdsa."""
 	if p1.is_infinity:
 		return p2
 	if p2.is_infinity:
 		return p1
 	
-	# For cryptography library, we need to add via scalar representation
-	# P1 + P2 is not directly supported, so we use a workaround:
-	# We'll use the fact that we can serialize/deserialize points
-	# or work through scalars when needed.
-	
-	# Alternative: represent as (x1, y1) + (x2, y2) using manual EC math
-	# But this defeats the purpose of using the library.
-	
-	# Better approach: use point compression/decompression and manual addition
-	# For now, let's implement using the raw EC math from cryptography internals
-	
-	from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicNumbers
-	from cryptography.hazmat.backends.openssl.backend import backend
-	
-	x1, y1 = p1.to_affine()
-	x2, y2 = p2.to_affine()
-	
-	# Use cryptography's internal EC math
-	# This is a bit hackish but works
-	curve = _CURVE
-	
-	# For secp256k1: y² = x³ + 7
-	p = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
-	
-	# Point addition formula
-	if x1 == x2:
-		if y1 == y2:
-			# Point doubling
-			s = (3 * x1 * x1 * pow(2 * y1, -1, p)) % p
-		else:
-			# Points are inverses
-			return EC_INFINITY
-	else:
-		# Point addition
-		s = ((y2 - y1) * pow(x2 - x1, -1, p)) % p
-	
-	x3 = (s * s - x1 - x2) % p
-	y3 = (s * (x1 - x3) - y1) % p
-	
-	return ECPoint.from_affine(x3, y3)
+	# fastecdsa supports direct point addition
+	result = p1._point + p2._point
+	return ECPoint(result)
 
 
 def _ec_point_neg(p: ECPoint) -> ECPoint:
@@ -160,35 +116,20 @@ def _ec_point_neg(p: ECPoint) -> ECPoint:
 	if p.is_infinity:
 		return EC_INFINITY
 	
+	# fastecdsa: negation is just negating the y-coordinate
 	x, y = p.to_affine()
-	p_field = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
-	return ECPoint.from_affine(x, (-y) % p_field)
+	return ECPoint.from_affine(x, (-y) % _EC_P)
 
 
 def _ec_scalar_mult(k: int, point: ECPoint) -> ECPoint:
-	"""Multiply an elliptic curve point by a scalar."""
+	"""Multiply an elliptic curve point by a scalar using fastecdsa."""
 	if point.is_infinity or k % _EC_N == 0:
 		return EC_INFINITY
 	
-	# If point is the generator, we can use from_scalar directly
-	# Otherwise, we need to do repeated addition
-	
-	# For generator multiplication, this is efficient
-	if point == EC_G:
-		return ECPoint.from_scalar(k)
-	
-	# For general point multiplication, we need to implement double-and-add
-	result = EC_INFINITY
-	addend = point
+	# fastecdsa supports direct scalar multiplication
 	k = k % _EC_N
-	
-	while k:
-		if k & 1:
-			result = _ec_point_add(result, addend)
-		addend = _ec_point_add(addend, addend)
-		k >>= 1
-	
-	return result
+	result = k * point._point
+	return ECPoint(result)
 
 
 def _hash_to_scalar_ec(data: bytes) -> int:
@@ -1134,10 +1075,8 @@ def _ec_point_to_bytes(point: ECPoint) -> bytes:
 	if point.is_infinity:
 		return b'\x00'  # Special marker for infinity
 	x, y = point.to_affine()
-	# Encode as compressed point (33 bytes for secp256k1)
-	# Format: 0x02 or 0x03 (based on y parity) followed by x coordinate
-	prefix = 0x02 if y % 2 == 0 else 0x03
-	return bytes([prefix]) + x.to_bytes(32, 'big')
+	# Encode as x (32 bytes) + y (32 bytes) for simple serialization
+	return x.to_bytes(32, 'big') + y.to_bytes(32, 'big')
 
 
 def _ec_point_from_bytes(data: bytes) -> ECPoint:
@@ -1145,13 +1084,10 @@ def _ec_point_from_bytes(data: bytes) -> ECPoint:
 	if data == b'\x00':
 		return ECPoint(None)  # Point at infinity
 	
-	# Decompress point
-	from cryptography.hazmat.primitives.asymmetric import ec
-	from cryptography.hazmat.backends import default_backend
-	
-	# Use cryptography's built-in decompression
-	public_key = ec.EllipticCurvePublicKey.from_encoded_point(_CURVE, data)
-	return ECPoint(public_key)
+	# Decode x and y from 64 bytes
+	x = int.from_bytes(data[:32], 'big')
+	y = int.from_bytes(data[32:64], 'big')
+	return ECPoint.from_affine(x, y)
 
 
 def _parallel_ec_row_update(args):
@@ -2452,7 +2388,7 @@ def test_ec_sparse(n: int, m: int, k: int = 10):
 	while len(items) < n:
 		items.add(os.urandom(16))
 	item_list = list(items)
-	print(f"  ✓ Generated {len(item_list)} items")
+	print(f"  Generated {len(item_list)} items")
 	print()
 	
 	# Attempt construction
@@ -2464,7 +2400,7 @@ def test_ec_sparse(n: int, m: int, k: int = 10):
 		table, meta = construct_ellipse_table_ec_sparse(item_list, m=m, k=k, max_attempts=5)
 		elapsed = time.time() - start
 		
-		print(f"  ✓ SUCCESS in {elapsed:.2f} seconds!")
+		print(f"  SUCCESS in {elapsed:.2f} seconds!")
 		print(f"  Seed: {meta['seed']}")
 		print(f"  Matrix sparsity: {meta['sparsity']} ({meta['non_zero_entries']} non-zero)")
 		print()
@@ -2484,11 +2420,11 @@ def test_ec_sparse(n: int, m: int, k: int = 10):
 				print(f"  ✗ Item {idx}: MISMATCH")
 				all_correct = False
 			else:
-				print(f"  ✓ Item {idx}: OK")
+				print(f"  Item {idx}: OK")
 		
 		if all_correct:
 			print()
-			print(f"✓ Sparse Gaussian completed successfully!")
+			print(f"Sparse Gaussian completed successfully!")
 			print(f"  Time: {elapsed:.2f}s")
 			print(f"  Throughput: {n/elapsed:.1f} items/second")
 			return True
@@ -2525,7 +2461,7 @@ def test_ec_peeling_large(n: int = 900, m: int = 1000, k: int = 10):
 	while len(items) < n:
 		items.add(os.urandom(16))
 	item_list = list(items)
-	print(f"  ✓ Generated {len(item_list)} items")
+	print(f"  Generated {len(item_list)} items")
 	print()
 	
 	# Attempt construction
@@ -2537,7 +2473,7 @@ def test_ec_peeling_large(n: int = 900, m: int = 1000, k: int = 10):
 		table, meta = construct_ellipse_table_ec_peeling(item_list, m=m, k=k, max_attempts=5)
 		elapsed = time.time() - start
 		
-		print(f"  ✓ SUCCESS in {elapsed:.2f} seconds!")
+		print(f"  SUCCESS in {elapsed:.2f} seconds!")
 		print(f"  Seed: {meta['seed']}")
 		print(f"  Peeled edges: {meta['peeled']}/{n}")
 		print(f"  Core size: {meta['core']}")
@@ -2555,10 +2491,10 @@ def test_ec_peeling_large(n: int = 900, m: int = 1000, k: int = 10):
 			if not (got == expect):
 				print(f"  ✗ Item {idx}: MISMATCH")
 			else:
-				print(f"  ✓ Item {idx}: OK")
+				print(f"  Item {idx}: OK")
 		
 		print()
-		print(f"✓ Peeling algorithm completed successfully!")
+		print(f"Peeling algorithm completed successfully!")
 		print(f"  Time: {elapsed:.2f}s")
 		print(f"  Throughput: {n/elapsed:.1f} items/second")
 		
@@ -2623,9 +2559,9 @@ def test_ec_gaussian(k: int = 3, trials: int = 50):
 	print(f"  Failures:  {failures}/{trials} ({100*failures/trials:.1f}%)")
 	print(f"  Avg time per trial: {avg_time*1000:.2f} ms")
 	print()
-	print("  ✓ Works directly on EC points!")
-	print("  ✓ No discrete logs needed!")
-	print("  ✓ Scalars come from hash structure, not from extracting DLogs!")
+	print("  Works directly on EC points!")
+	print("  No discrete logs needed!")
+	print("  Scalars come from hash structure, not from extracting DLogs!")
 
 
 def test_ec_msm(n: int, m: int, k: int):
@@ -2654,7 +2590,7 @@ def test_ec_msm(n: int, m: int, k: int):
 	while len(items) < n:
 		items.add(os.urandom(16))
 	item_list = list(items)
-	print(f"  ✓ Generated {len(item_list)} items")
+	print(f"  Generated {len(item_list)} items")
 	print()
 	
 	# Attempt construction
@@ -2668,7 +2604,7 @@ def test_ec_msm(n: int, m: int, k: int):
 		)
 		elapsed = time.time() - start
 		
-		print(f"  ✓ SUCCESS in {elapsed:.2f} seconds!")
+		print(f"  SUCCESS in {elapsed:.2f} seconds!")
 		print(f"  Seed: {meta['seed']}")
 		print(f"  Avg coefficients per row: {meta['avg_coeffs_per_row']:.1f}")
 		print()
@@ -2688,11 +2624,11 @@ def test_ec_msm(n: int, m: int, k: int):
 				print(f"  ✗ Item {idx}: MISMATCH")
 				all_correct = False
 			else:
-				print(f"  ✓ Item {idx}: OK")
+				print(f"  Item {idx}: OK")
 		
 		if all_correct:
 			print()
-			print(f"✓ MSM construction completed successfully!")
+			print(f"MSM construction completed successfully!")
 			print(f"  Total time: {elapsed:.2f}s ({elapsed/60:.2f} minutes)")
 			print(f"  Throughput: {n/elapsed:.1f} items/second")
 			return True
@@ -2738,7 +2674,7 @@ def test_ec_parallel(n: int, m: int, k: int, num_cores: int):
 	while len(items) < n:
 		items.add(os.urandom(16))
 	item_list = list(items)
-	print(f"  ✓ Generated {len(item_list)} items")
+	print(f"  Generated {len(item_list)} items")
 	print()
 	
 	# Attempt construction
@@ -2752,7 +2688,7 @@ def test_ec_parallel(n: int, m: int, k: int, num_cores: int):
 		)
 		elapsed = time.time() - start
 		
-		print(f"  ✓ SUCCESS in {elapsed:.2f} seconds!")
+		print(f"  SUCCESS in {elapsed:.2f} seconds!")
 		print(f"  Seed: {meta['seed']}")
 		print()
 		
@@ -2771,11 +2707,11 @@ def test_ec_parallel(n: int, m: int, k: int, num_cores: int):
 				print(f"  ✗ Item {idx}: MISMATCH")
 				all_correct = False
 			else:
-				print(f"  ✓ Item {idx}: OK")
+				print(f"  Item {idx}: OK")
 		
 		if all_correct:
 			print()
-			print(f"✓ Parallel construction completed successfully!")
+			print(f"Parallel construction completed successfully!")
 			print(f"  Time: {elapsed:.2f}s ({elapsed/60:.2f} minutes)")
 			print(f"  Throughput: {n/elapsed:.1f} items/second")
 			
