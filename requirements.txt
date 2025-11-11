@@ -1,0 +1,6 @@
+cffi==2.0.0
+cryptography==46.0.3
+numpy==2.2.6
+pycparser==2.23
+scipy==1.15.3
+typing_extensions==4.15.0
